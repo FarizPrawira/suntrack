@@ -1,5 +1,10 @@
 //! Suntrack — a lightweight desktop time tracker.
 
+// On Windows a console-subsystem binary opens a terminal window alongside the
+// GUI. Mark release builds as a GUI app so only the dashboard window appears;
+// debug builds keep the console so `eprintln!` diagnostics stay visible.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod config;
 mod db;
