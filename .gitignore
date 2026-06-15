@@ -1,0 +1,10 @@
+/target
+
+# User-local runtime files
+/config.toml
+/usage.db
+/usage.db-shm
+/usage.db-wal
+
+# JetBrains IDE config
+/.idea

@@ -1,0 +1,34 @@
+name: Release
+
+# Build and publish the Windows binary whenever a version tag is pushed.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Needed for softprops/action-gh-release to create the release and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/suntrack.exe
+          generate_release_notes: true
