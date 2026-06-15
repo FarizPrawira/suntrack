@@ -1,6 +1,6 @@
 [package]
 name = "suntrack"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "A lightweight, local-first desktop time tracker for Windows, built in Rust."
 authors = ["Fariz Prawira"]
@@ -19,3 +19,8 @@ rusqlite = { version = "0.40.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.1.2"
 user-idle = "0.6.0"
+
+# Embeds Windows version metadata (see build.rs) so the binary reports itself
+# as "Suntrack" regardless of the .exe filename.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

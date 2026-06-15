@@ -27,8 +27,12 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
+      - name: Name the binary with the release version
+        shell: pwsh
+        run: Copy-Item target/release/suntrack.exe "suntrack-${{ github.ref_name }}.exe"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/suntrack.exe
+          files: suntrack-${{ github.ref_name }}.exe
           generate_release_notes: true

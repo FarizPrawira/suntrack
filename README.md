@@ -73,7 +73,7 @@ telemetry: your activity history never leaves your computer.
 Suntrack targets **Windows** and ships as a single self-contained executable — there's no
 installer to run.
 
-1. Download the latest **`suntrack.exe`** from the [Releases page](https://github.com/FarizPrawira/suntrack/releases).
+1. Download the latest **`suntrack-<version>.exe`** from the [Releases page](https://github.com/FarizPrawira/suntrack/releases).
 2. Move it to a permanent location — for example, a `Suntrack` folder within your user
    directory — and run it. Optionally, pin it to the taskbar for quick access.
 3. On first launch, Suntrack creates its data directory at `%LOCALAPPDATA%\suntrack` and
