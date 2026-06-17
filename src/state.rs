@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI64};
 use std::sync::{Arc, Mutex};
 
 // Reserved app names. Single source of truth for the active/idle split that the
@@ -10,6 +10,13 @@ use std::sync::{Arc, Mutex};
 pub const IDLE: &str = "Idle";
 // Recorded when the foreground window can't be identified.
 pub const UNKNOWN: &str = "Unknown";
+
+// A session row id. Tracked time is tagged with one, so work can be filtered by
+// session (e.g. "Work" vs "Learning").
+pub type SessionId = i64;
+// The session seeded on first launch; also the fallback when a stored active
+// session can't be resolved. Matches the row seeded in `db::run_migration`.
+pub const DEFAULT_SESSION_ID: SessionId = 1;
 
 // A slice of tracked time, keyed by app and window title.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -64,10 +71,14 @@ impl UsageRow {
 // The handful of values the UI and tracker threads share, cloned as a unit.
 #[derive(Clone)]
 pub struct SharedState {
-    // Today's tracked time, accumulated live by the tracker.
+    // The active session's tracked time for today, accumulated live by the
+    // tracker. Switching sessions flushes and reloads this map (see the tracker).
     pub usage: Arc<Mutex<UsageMap>>,
-    // Tracker on/off switch; starts enabled.
+    // Tracker on/off switch; its launch value comes from the config.
     pub tracking: Arc<AtomicBool>,
+    // The session new time is recorded under. The UI sets it; the tracker reads
+    // it each tick and rolls the live map over on a change.
+    pub current_session: Arc<AtomicI64>,
     // App currently being recorded (None when paused), shown in the mini-HUD.
     pub current_app: Arc<Mutex<Option<String>>>,
     // Raised by the minimize watcher to ask the UI to collapse to the mini-HUD —
@@ -76,10 +87,11 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    pub fn new() -> Self {
+    pub fn new(start_tracking: bool, session: SessionId) -> Self {
         Self {
             usage: Arc::new(Mutex::new(UsageMap::new())),
-            tracking: Arc::new(AtomicBool::new(true)),
+            tracking: Arc::new(AtomicBool::new(start_tracking)),
+            current_session: Arc::new(AtomicI64::new(session)),
             current_app: Arc::new(Mutex::new(None)),
             wants_mini: Arc::new(AtomicBool::new(false)),
         }
@@ -102,6 +114,6 @@ impl SharedState {
 
 impl Default for SharedState {
     fn default() -> Self {
-        Self::new()
+        Self::new(true, DEFAULT_SESSION_ID)
     }
 }

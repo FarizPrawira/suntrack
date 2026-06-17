@@ -24,10 +24,20 @@ use std::time::Duration;
 fn main() -> eframe::Result {
     let config = config::load();
     let conn = db::init_db();
-    let state = SharedState::new();
+
+    // Resolve the session to start in (named default, or the last one used) and
+    // persist it so "continue last" survives even an immediate, untracked close.
+    let session = db::resolve_start_session(&conn, &config.default_session);
+    db::or_warn(
+        db::set_meta(&conn, db::ACTIVE_SESSION_KEY, &session.to_string()),
+        "persist active session",
+    );
+
+    let state = SharedState::new(config.start_tracking_on_launch, session);
 
     let tracker_state = state.clone();
-    thread::spawn(move || tracker::run_tracker(tracker_state, config));
+    let tracker_config = config.clone();
+    thread::spawn(move || tracker::run_tracker(tracker_state, tracker_config));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -41,10 +51,44 @@ fn main() -> eframe::Result {
         "Suntrack",
         options,
         Box::new(move |cc| {
-            // Register the Phosphor icon font so toolbar glyphs render.
+            // Bundle Inter (the UI typeface) and the Phosphor icon font.
             let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "Inter".to_owned(),
+                Arc::new(egui::FontData::from_static(include_bytes!(
+                    "../assets/Inter-Regular.ttf"
+                ))),
+            );
+            fonts.font_data.insert(
+                "Inter-Medium".to_owned(),
+                Arc::new(egui::FontData::from_static(include_bytes!(
+                    "../assets/Inter-Medium.ttf"
+                ))),
+            );
             egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+            // Inter is the primary proportional text face (phosphor stays in the
+            // chain as a fallback for any un-tagged icon).
+            if let Some(prop) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                prop.retain(|f| f != "Inter");
+                prop.insert(0, "Inter".to_owned());
+            }
+            // Icons render through this Phosphor-only family (see theme::glyph) so
+            // Inter's few colliding private-use glyphs (folder, carets) can't
+            // shadow them — while Latin text still uses Inter.
+            fonts.families.insert(
+                egui::FontFamily::Name("icons".into()),
+                vec!["phosphor".to_owned()],
+            );
+            // A named family for medium-weight headings/emphasis (egui has no
+            // synthetic bold, so the weight is a separate face).
+            fonts.families.insert(
+                egui::FontFamily::Name("medium".into()),
+                vec!["Inter-Medium".to_owned(), "Inter".to_owned()],
+            );
             cc.egui_ctx.set_fonts(fonts);
+
+            // Dark + amber palette for all stock widgets.
+            crate::view::theme::configure_visuals(&cc.egui_ctx);
 
             // eframe suspends the update loop while minimized, so the minimize
             // can't be caught in the UI. A side thread holding a clone of the

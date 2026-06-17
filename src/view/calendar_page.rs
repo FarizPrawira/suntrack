@@ -1,88 +1,70 @@
 //! The month heatmap calendar page.
 
 use super::theme::*;
-use super::widgets::{icon_button, text_button};
+use super::widgets::{Step, month_stepper, segmented, text_button};
 use crate::app::{Page, TrackerApp};
 use crate::db;
 use chrono::{Datelike, Local, Months, NaiveDate};
 use eframe::egui::{self, Ui};
-use egui_phosphor::regular;
 
 impl TrackerApp {
     pub(crate) fn calendar_page(&mut self, ui: &mut Ui) {
-        // HEADER — one centered row: Back | ◀ Month Year ▶ | Today.
+        // HEADER — scope toggle on the left; month stepper + Today on the right.
+        // (Returning to the tracker is the sidebar's job, so there's no Back.)
         // Closures only set local flags so they never borrow self.
         let today = Local::now().date_naive();
         let month_label = self.view_month.format("%B %Y").to_string();
-        let mut go_back = false;
         let mut go_today = false;
-        let mut prev_month = false;
-        let mut next_month = false;
+        let mut new_view_all = self.view_all;
+        let mut month_step = Step::None;
 
         ui.horizontal(|ui| {
-            let gap = ui.spacing().item_spacing.x;
-            let back_w = 74.0;
-            let today_w = 66.0;
-            let label_w = 110.0;
-            let arrow_w = CONTROL_H; // matches the icon_button width for centering math
-            let nav_w = arrow_w * 2.0 + label_w + gap * 2.0;
-            let row_width = ui.available_width();
+            ui.spacing_mut().item_spacing.x = 8.0;
 
-            // Back — far left.
-            if text_button(
-                ui,
-                &format!("{}  Back", regular::CARET_LEFT),
-                "Back to tracker",
-                back_w,
-            ) {
-                go_back = true;
-            }
+            // Scope the heatmap to the active session or all of them. The active
+            // session can only be changed from the dashboard/HUD, not here.
+            new_view_all = segmented(ui, "This session", "All", self.view_all);
 
-            // Month nav — centered across the full row.
-            let pad_left = ((row_width - nav_w) * 0.5 - back_w - gap).max(0.0);
-            ui.add_space(pad_left);
-            if icon_button(ui, regular::CARET_LEFT, "Previous month", true) {
-                prev_month = true;
-            }
-            ui.add_sized(
-                egui::vec2(label_w, CONTROL_H),
-                egui::Label::new(month_label),
-            );
-            if icon_button(ui, regular::CARET_RIGHT, "Next month", true) {
-                next_month = true;
-            }
-
-            // Today — far right.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "Today", "Jump to current month", today_w) {
+                if text_button(ui, "Today", "Jump to current month", 66.0) {
                     go_today = true;
                 }
+                ui.add_space(2.0);
+                month_step = month_stepper(ui, &month_label);
             });
         });
 
-        if prev_month {
-            self.view_month = self.view_month.checked_sub_months(Months::new(1)).unwrap();
+        if new_view_all != self.view_all {
+            self.view_all = new_view_all;
         }
-        if next_month {
-            self.view_month = self.view_month.checked_add_months(Months::new(1)).unwrap();
+        match month_step {
+            Step::Prev => {
+                self.view_month = self.view_month.checked_sub_months(Months::new(1)).unwrap();
+            }
+            Step::Next => {
+                self.view_month = self.view_month.checked_add_months(Months::new(1)).unwrap();
+            }
+            _ => {}
         }
         if go_today {
             // Recenter the calendar on the current month (stay here).
             self.view_month = today.with_day(1).unwrap();
         }
-        if go_back {
-            self.page = Page::Tracker;
-        }
 
-        // Load this month's per-day totals for the heatmap (only when it changes).
-        if self.loaded_month != Some(self.view_month) {
+        // Load this month's per-day totals for the heatmap, scoped to the active
+        // session (or all of them), reloading only when month or scope changes.
+        let filter = self.view_filter();
+        let month_key = (self.view_month, filter);
+        if self.loaded_month != Some(month_key) {
             let prefix = self.view_month.format("%Y-%m").to_string();
             self.month_totals = db::or_warn(
-                db::totals_for_month(&self.conn, &prefix),
+                db::totals_for_month(&self.conn, &prefix, filter),
                 "load monthly totals",
             );
-            self.loaded_month = Some(self.view_month);
+            self.loaded_month = Some(month_key);
         }
+
+        ui.add_space(10.0);
 
         // BODY — reserve a small strip at the bottom for the legend.
         let avail_size = ui.available_size();
@@ -166,17 +148,21 @@ impl TrackerApp {
 
         // Heatmap legend, pinned to the bottom-right (bottom_up + Align::Max
         // anchors it to the bottom edge and the right of the remaining space).
+        // The inner row is right_to_left so it hugs the right edge; items are
+        // emitted in reverse (More → bright…empty → Less) so they still read
+        // "Less [faint…bright] More" left-to-right. A left_to_right row would
+        // fill the width and drift back to the left edge.
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Max), |ui| {
-            ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
-                ui.label(egui::RichText::new("Less").size(11.0).color(MUTED));
-                for sample in HEAT_SAMPLES {
+                ui.label(egui::RichText::new("More").size(11.0).color(MUTED));
+                for &sample in HEAT_SAMPLES.iter().rev() {
                     let (fill, _) = heat_cell(sample);
                     let (rect, _) =
                         ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::hover());
                     ui.painter().rect_filled(rect, 3.0, fill);
                 }
-                ui.label(egui::RichText::new("More").size(11.0).color(MUTED));
+                ui.label(egui::RichText::new("Less").size(11.0).color(MUTED));
             });
         });
     }
