@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::db;
-use crate::state::{ActivityKey, SharedState, UNKNOWN};
+use crate::state::{ActivityKey, SessionId, SharedState, UNKNOWN};
 use active_win_pos_rs::get_active_window;
 use chrono::{Local, Timelike};
 use rusqlite::Connection;
@@ -21,9 +21,12 @@ pub fn run_tracker(state: SharedState, config: Config) {
     let conn = db::open();
 
     let mut current_date = db::date_key(Local::now().date_naive());
+    // The session the live map currently holds. Set by the UI; the tracker swaps
+    // the map over whenever it changes (see `roll_session`).
+    let mut current_session = state.current_session.load(Ordering::Relaxed);
 
     db::or_warn(
-        db::load_usage_for_date(&conn, &current_date, &state.usage),
+        db::load_usage_for_date(&conn, &current_date, current_session, &state.usage),
         "load today's usage",
     );
 
@@ -32,7 +35,7 @@ pub fn run_tracker(state: SharedState, config: Config) {
     // Sub-second remainder carried between ticks (the map stores whole seconds).
     let mut carried_remainder = 0.0_f64;
     // Previous tick's on/off state, so we flush exactly once on the pause edge.
-    let mut was_tracking = true;
+    let mut was_tracking = state.tracking.load(Ordering::Relaxed);
 
     loop {
         thread::sleep(Duration::from_secs(refresh_rate));
@@ -53,11 +56,33 @@ pub fn run_tracker(state: SharedState, config: Config) {
         let today = db::date_key(now.date_naive());
         let crossed_midnight = today != current_date;
 
+        // The UI switched the active session: flush the one being left and load
+        // the one being entered, so this tick (and later ones) accrue to it.
+        let desired_session = state.current_session.load(Ordering::Relaxed);
+        if desired_session != current_session {
+            roll_session(
+                &conn,
+                &state,
+                &current_date,
+                current_session,
+                desired_session,
+                &mut last_save,
+            );
+            current_session = desired_session;
+        }
+
         if elapsed == 0 {
             // No whole second to attribute this tick, but the day may still have
             // rolled over while sub-second ticks accumulated.
             if crossed_midnight {
-                roll_day(&conn, &state, &mut current_date, today, &mut last_save);
+                roll_day(
+                    &conn,
+                    &state,
+                    &mut current_date,
+                    today,
+                    current_session,
+                    &mut last_save,
+                );
             }
             continue;
         }
@@ -70,12 +95,19 @@ pub fn run_tracker(state: SharedState, config: Config) {
             if crossed_midnight {
                 // The rollover flush already persists the closing day, so it
                 // subsumes the pause flush.
-                roll_day(&conn, &state, &mut current_date, today, &mut last_save);
+                roll_day(
+                    &conn,
+                    &state,
+                    &mut current_date,
+                    today,
+                    current_session,
+                    &mut last_save,
+                );
             } else if was_tracking {
                 // On the pause transition, persist once so a hard kill while
                 // paused can't lose the seconds accumulated since the last save.
                 db::or_warn(
-                    db::flush_usage(&conn, &current_date, &state.usage),
+                    db::flush_usage(&conn, &current_date, current_session, &state.usage),
                     "flush on pause",
                 );
                 last_save = Instant::now();
@@ -116,7 +148,14 @@ pub fn run_tracker(state: SharedState, config: Config) {
             // map before crediting the new one. carried_remainder is left intact
             // on purpose — it's real sub-second time, and dropping it would
             // reintroduce the truncation loss it exists to prevent.
-            roll_day(&conn, &state, &mut current_date, today, &mut last_save);
+            roll_day(
+                &conn,
+                &state,
+                &mut current_date,
+                today,
+                current_session,
+                &mut last_save,
+            );
 
             if after_midnight > 0 {
                 let mut map = state.usage.lock().unwrap();
@@ -130,7 +169,7 @@ pub fn run_tracker(state: SharedState, config: Config) {
         // Persist periodically instead of on every tick.
         if last_save.elapsed().as_secs() >= config.save_interval_secs {
             db::or_warn(
-                db::flush_usage(&conn, &current_date, &state.usage),
+                db::flush_usage(&conn, &current_date, current_session, &state.usage),
                 "periodic flush",
             );
             last_save = Instant::now();
@@ -145,14 +184,38 @@ fn roll_day(
     state: &SharedState,
     current_date: &mut String,
     today: String,
+    session: SessionId,
     last_save: &mut Instant,
 ) {
     // Persist the final state of the day before we throw it away.
     db::or_warn(
-        db::flush_usage(conn, current_date.as_str(), &state.usage),
+        db::flush_usage(conn, current_date.as_str(), session, &state.usage),
         "flush usage at day rollover",
     );
     *current_date = today;
     state.usage.lock().unwrap().clear();
+    *last_save = Instant::now();
+}
+
+// Persist the session being left, then load the one being entered into the live
+// map so it reflects that session's existing time for today. Mirrors roll_day's
+// flush-and-reset, but swaps session instead of date. (The UI persists the new
+// active id to `meta`, so the tracker doesn't touch it here.)
+fn roll_session(
+    conn: &Connection,
+    state: &SharedState,
+    current_date: &str,
+    old_session: SessionId,
+    new_session: SessionId,
+    last_save: &mut Instant,
+) {
+    db::or_warn(
+        db::flush_usage(conn, current_date, old_session, &state.usage),
+        "flush usage on session switch",
+    );
+    db::or_warn(
+        db::load_usage_for_date(conn, current_date, new_session, &state.usage),
+        "load session usage on switch",
+    );
     *last_save = Instant::now();
 }
