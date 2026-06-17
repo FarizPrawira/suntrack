@@ -6,4 +6,6 @@ pub(crate) mod widgets;
 
 mod calendar_page;
 mod hud;
+mod nav;
+mod sessions_page;
 mod tracker_page;
