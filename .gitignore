@@ -8,3 +8,7 @@
 
 # JetBrains IDE config
 /.idea
+
+# Local developer/AI context docs (kept out of the repo)
+/ARCHITECTURE.md
+/CLAUDE.md
